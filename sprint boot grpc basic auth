@@ -1,0 +1,763 @@
+我有一個spring boot的程式，使用grpc作為api，現在我想加入basic auth，請幫我提供範例的code
+以下是一個範例的Spring Boot程式，它使用gRPC作為API並使用基本身份驗證（Basic Auth）保護它的端點：
+
+java
+Copy code
+import io.grpc.Server;
+import io.grpc.ServerBuilder;
+import io.grpc.stub.StreamObserver;
+
+import java.io.IOException;
+
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.WebSecurityConfigurerAdapter;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+
+import static io.grpc.Metadata.ASCII_STRING_MARSHALLER;
+
+@EnableWebSecurity
+public class MyGrpcServer extends WebSecurityConfigurerAdapter {
+
+    public static void main(String[] args) throws IOException, InterruptedException {
+        int port = 8080;
+        Server server = ServerBuilder.forPort(port)
+                .addService(new GreeterImpl())
+                .intercept(new BasicAuthInterceptor())
+                .build()
+                .start();
+        System.out.println("Server started, listening on " + port);
+        server.awaitTermination();
+    }
+
+    private static class GreeterImpl extends GreeterGrpc.GreeterImplBase {
+        @Override
+        public void sayHello(HelloRequest request, StreamObserver<HelloResponse> responseObserver) {
+            String name = request.getName();
+            String message = "Hello " + name;
+            HelloResponse response = HelloResponse.newBuilder()
+                    .setMessage(message)
+                    .build();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+        }
+    }
+
+    private static class BasicAuthInterceptor implements ServerInterceptor {
+        @Override
+        public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(ServerCall<ReqT, RespT> call, Metadata headers, ServerCallHandler<ReqT, RespT> next) {
+            String authHeader = headers.get(Metadata.Key.of("Authorization", ASCII_STRING_MARSHALLER));
+            if (authHeader == null || !authHeader.startsWith("Basic ")) {
+                call.close(Status.UNAUTHENTICATED.withDescription("Missing or invalid Authorization header."), headers);
+                return new ServerCall.Listener<ReqT>() {};
+            }
+            String[] parts = authHeader.split(" ");
+            String credentials = new String(Base64.getDecoder().decode(parts[1]));
+            String[] usernamePassword = credentials.split(":");
+            String username = usernamePassword[0];
+            String password = usernamePassword[1];
+            if (!authenticate(username, password)) {
+                call.close(Status.UNAUTHENTICATED.withDescription("Invalid username or password."), headers);
+                return new ServerCall.Listener<ReqT>() {};
+            }
+            return next.startCall(call, headers);
+        }
+
+        private boolean authenticate(String username, String password) {
+            // Perform authentication logic here
+            // In this example, we're using a hardcoded username/password combination
+            PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+            String encodedPassword = passwordEncoder.encode("password");
+            return username.equals("user") && passwordEncoder.matches(password, encodedPassword);
+        }
+    }
+
+    @Override
+    protected void configure(HttpSecurity http) throws Exception {
+        http
+                .csrf().disable()
+                .authorizeRequests()
+                .antMatchers("/").permitAll()
+                .anyRequest().authenticated()
+                .and()
+                .httpBasic();
+    }
+}
+這個範例使用Spring Security來保護端點，它使用了基本身份驗證（Basic Auth）。MyGrpcServer類繼承了WebSecurityConfigurerAdapter並且覆寫了`
+
+
+
+
+繼續
+其中的configure方法來設定安全配置。這裡我們禁用了CSRF保護，允許任何人訪問根路徑（/），並要求對於其他所有請求都進行身份驗證。使用httpBasic方法設置基本身份驗證。
+
+在MyGrpcServer類中，我們使用addService方法添加一個gRPC服務的實現（在這個例子中是GreeterImpl），然後使用intercept方法設置基本身份驗證攔截器（BasicAuthInterceptor）來保護所有端點。
+
+BasicAuthInterceptor實現了ServerInterceptor接口，用來攔截所有的gRPC請求。當收到一個請求時，攔截器會檢查Authorization標頭中是否包含基本身份驗證的認證信息。如果沒有，或者認證信息不正確，攔截器將關閉呼叫並返回一個錯誤狀態。
+
+如果認證信息是正確的，攔截器將繼續呼叫鏈並執行原來的服務實現。在這個例子中，攔截器只是檢查使用硬編碼的用戶名和密碼進行身份驗證，但實際上你需要將身份驗證邏輯替換為你的實現。
+
+希望這個範例能夠幫助你實現基本身份驗證保護你的gRPC端點。
+
+
+
+
+我想設定只有username為Admin時才可以通過basic authentication，我要如何設定
+如果你只想允許使用者名稱為"Admin"的用戶進行基本身份驗證，可以對BasicAuthInterceptor進行修改。修改的部分如下所示：
+
+java
+Copy code
+public class BasicAuthInterceptor implements ServerInterceptor {
+ 
+    private static final String USERNAME = "Admin";
+    private static final String PASSWORD = "password";
+ 
+    @Override
+    public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(
+            ServerCall<ReqT, RespT> call,
+            Metadata headers,
+            ServerCallHandler<ReqT, RespT> next) {
+ 
+        String authHeader = headers.get(Metadata.Key.of("Authorization", Metadata.ASCII_STRING_MARSHALLER));
+        if (authHeader == null || !authHeader.startsWith("Basic ")) {
+            call.close(Status.UNAUTHENTICATED.withDescription("Missing authentication token"), headers);
+            return new ServerCall.Listener<ReqT>() {};
+        }
+ 
+        String[] tokens = new String(Base64.getDecoder().decode(authHeader.substring(6))).split(":");
+        if (tokens.length != 2 || !tokens[0].equals(USERNAME) || !tokens[1].equals(PASSWORD)) {
+            call.close(Status.UNAUTHENTICATED.withDescription("Invalid username or password"), headers);
+            return new ServerCall.Listener<ReqT>() {};
+        }
+ 
+        return next.startCall(call, headers);
+    }
+}
+在這個修改版的BasicAuthInterceptor中，我們將USERNAME常量設置為"Admin"，並在驗證時檢查使用者名稱是否為這個值。如果使用者名稱不是"Admin"，攔截器將返回Status.UNAUTHENTICATED狀態並關閉呼叫。
+
+請注意，為了簡單起見，在這個範例中我們仍然使用硬編碼的方式來進行身份驗證。在實際情況中，你需要替換這些值，例如使用使用者名稱和密碼的數據庫或其他身份驗證機制。
+
+希望這個範例能夠幫助你設置基本身份驗證以限制只有使用者名稱為"Admin"的用戶可以訪問你的gRPC端點。
+
+
+
+
+
+
+2 / 2
+
+請問有辦法利用套件的方式，加上一些＠annotation來實現在grpc中的basic authentication嗎
+盡量避免自行撰寫解碼basic authentication的方式
+是的，你可以使用現有的套件來實現基本身份驗證，這樣可以更容易地設置和管理你的驗證機制。在Spring中，你可以使用spring-security套件來實現這一點。
+
+以下是一個示例，演示如何使用spring-security來實現基本身份驗證，並在gRPC服務端點上使用@PreAuthorize注解來限制只有授權的用戶才能訪問：
+
+添加相關的套件到pom.xml檔案中：
+xml
+Copy code
+<dependencies>
+    <!-- Spring Boot Starter Security -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-security</artifactId>
+    </dependency>
+    <!-- Spring Boot Starter Web -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <!-- Spring Boot Starter gRPC -->
+    <dependency>
+        <groupId>net.devh</groupId>
+        <artifactId>grpc-server-spring-boot-starter</artifactId>
+        <version>3.11.0</version>
+    </dependency>
+</dependencies>
+在application.yml中添加相關的配置：
+yaml
+Copy code
+spring:
+  security:
+    user:
+      name: Admin
+      password: password
+  grpc:
+    server:
+      port: 9090
+在這個示例中，我們使用Spring Boot的自動配置機制，設置一個用戶名為"Admin"、密碼為"password"的基本身份驗證。
+
+創建一個實現GlobalServerInterceptorConfigurer的bean，用來設置gRPC服務端點的攔截器：
+java
+Copy code
+import io.grpc.ServerInterceptor;
+import net.devh.boot.grpc.server.interceptor.GlobalServerInterceptorConfigurer;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.annotation.method.configuration.EnableGlobalMethodSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.configuration.WebSecurityConfigurerAdapter;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.crypto.password.NoOpPasswordEncoder;
+
+@Configuration
+@EnableWebSecurity
+@EnableGlobalMethodSecurity(prePostEnabled = true)
+public class SecurityConfig extends WebSecurityConfigurerAdapter {
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return NoOpPasswordEncoder.getInstance();
+    }
+
+    @Override
+    protected void configure(HttpSecurity http) throws Exception {
+        http
+            .authorizeRequests()
+            .anyRequest().authenticated()
+            .and()
+            .httpBasic();
+    }
+
+    @Bean
+    public GlobalServerInterceptorConfigurer globalInterceptorConfigurerAdapter() {
+        return registry -> registry.addServerInterceptors(getAuthInterceptor());
+    }
+
+    @Bean
+    public ServerInterceptor getAuthInterceptor() {
+        return new BasicAuthInterceptor();
+    }
+}
+在這個示例中，我們創建了一個SecurityConfig類，用於配置Spring Security相關的設置。我們使用了@EnableWebSecurity注解啟用了Web
+
+
+
+
+繼續
+Security，同時也啟用了方法級別的安全性控制，以便在gRPC服務端點上使用@PreAuthorize注解。
+
+我們創建了一個PasswordEncoder的bean，並使用NoOpPasswordEncoder作為密碼編碼器，以便在示例中快速演示基本身份驗證。在實際環境中，你應該使用更安全的密碼編碼器，例如BCryptPasswordEncoder。
+
+我們還實現了configure(HttpSecurity http)方法，用於設置基本身份驗證。在這個示例中，我們設置任何請求都需要驗證。
+
+最後，我們創建了一個GlobalServerInterceptorConfigurer的bean，並實現了getAuthInterceptor()方法，用於創建一個攔截器來執行基本身份驗證。
+
+創建BasicAuthInterceptor攔截器：
+java
+Copy code
+import io.grpc.*;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.authentication.www.BasicAuthenticationFilter;
+import org.springframework.util.StringUtils;
+
+public class BasicAuthInterceptor implements ServerInterceptor {
+
+    private static final Metadata.Key<String> AUTHORIZATION_METADATA_KEY =
+            Metadata.Key.of("Authorization", Metadata.ASCII_STRING_MARSHALLER);
+
+    private final AuthenticationManager authenticationManager;
+
+    public BasicAuthInterceptor() {
+        authenticationManager = new BasicAuthenticationFilter(new SecurityConfig()).getAuthenticationManager();
+    }
+
+    @Override
+    public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(ServerCall<ReqT, RespT> call, Metadata headers, ServerCallHandler<ReqT, RespT> next) {
+        String authorization = headers.get(AUTHORIZATION_METADATA_KEY);
+        if (StringUtils.hasText(authorization) && authorization.startsWith("Basic ")) {
+            String[] parts = new String(Base64.getDecoder().decode(authorization.substring(6))).split(":");
+            if (parts.length == 2) {
+                Authentication authRequest = new UsernamePasswordAuthenticationToken(parts[0], parts[1]);
+                Authentication authResult = authenticationManager.authenticate(authRequest);
+                SecurityContextHolder.getContext().setAuthentication(authResult);
+            }
+        }
+        return next.startCall(call, headers);
+    }
+}
+在這個示例中，我們創建了一個BasicAuthInterceptor攔截器，用於執行基本身份驗證。
+
+我們使用Metadata.Key創建了一個用於存儲授權頭的常量AUTHORIZATION_METADATA_KEY。
+
+在攔截器的interceptCall方法中，我們檢查請求頭中是否包含授權頭。如果是，我們使用Base64解碼授權頭，並使用冒號將其分割為用戶名和密碼。然後，我們創建了一個UsernamePasswordAuthenticationToken對象
+
+
+
+
+繼續
+，並使用Spring Security的AuthenticationManager對象進行身份驗證。如果身份驗證成功，我們將身份驗證結果設置為安全上下文的身份驗證對象。
+
+創建GlobalServerInterceptorConfigurer bean：
+java
+Copy code
+import net.devh.boot.grpc.server.interceptor.GlobalServerInterceptorConfigurer;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+public class GrpcServerConfiguration {
+
+    @Bean
+    public GlobalServerInterceptorConfigurer globalInterceptorConfigurer(BasicAuthInterceptor basicAuthInterceptor) {
+        return registry -> registry.add(basicAuthInterceptor);
+    }
+
+    @Bean
+    public BasicAuthInterceptor basicAuthInterceptor() {
+        return new BasicAuthInterceptor();
+    }
+}
+在這個示例中，我們創建了一個GlobalServerInterceptorConfigurer的bean，並實現了globalInterceptorConfigurer()方法。在這個方法中，我們將BasicAuthInterceptor攔截器添加到攔截器註冊表中。
+
+我們還創建了一個basicAuthInterceptor()方法，用於創建BasicAuthInterceptor攔截器的bean。
+
+創建一個測試gRPC服務：
+java
+Copy code
+import io.grpc.stub.StreamObserver;
+import net.devh.boot.grpc.server.service.GrpcService;
+
+@GrpcService
+public class GreetingServiceImpl extends GreetingServiceGrpc.GreetingServiceImplBase {
+
+    @Override
+    public void greet(GreetingRequest request, StreamObserver<GreetingResponse> responseObserver) {
+        String name = request.getName();
+        GreetingResponse response = GreetingResponse.newBuilder().setMessage("Hello, " + name).build();
+        responseObserver.onNext(response);
+        responseObserver.onCompleted();
+    }
+}
+在這個示例中，我們創建了一個GreetingServiceImpl的測試gRPC服務，用於測試基本身份驗證的功能。
+
+啟動Spring Boot應用程序並測試gRPC服務：
+現在，你可以啟動Spring Boot應用程序並使用gRPC客戶端測試GreetingService服務。在測試之前，請記得使用Base64編碼用戶名和密碼，並將其添加到授權頭中。
+
+例如，如果用戶名為admin，密碼為admin，則授權頭應該是Authorization: Basic YWRtaW46YWRtaW4=。
+
+如果一切正常，你應該能夠收到一個帶有Hello消息的響應。如果你使用的是錯誤的用戶名或密碼，你將收到一個401 Unauthorized響應。
+
+
+
+
+
+2 / 2
+
+public class BasicAuthInterceptor implements ServerInterceptor
+這個設置是可以和grpc的interceptor一起使用的嗎
+是的，BasicAuthInterceptor可以與gRPC攔截器一起使用。在上面的示例中，我們使用了Spring Boot的GlobalServerInterceptorConfigurer來將BasicAuthInterceptor添加到gRPC攔截器註冊表中。
+
+當gRPC請求到達服務器時，BasicAuthInterceptor將會被調用，並進行基本身份驗證。如果身份驗證成功，gRPC服務器將會繼續處理請求。如果身份驗證失敗，gRPC服務器將會返回401 Unauthorized響應給客戶端。
+
+你也可以將BasicAuthInterceptor添加到單個gRPC服務的攔截器列表中，這樣只有該服務會使用BasicAuthInterceptor進行身份驗證，而其他服務則不會使用。舉個例子，假設我們有一個名為MyService的gRPC服務：
+
+java
+Copy code
+import io.grpc.stub.StreamObserver;
+import net.devh.boot.grpc.server.service.GrpcService;
+
+@GrpcService(interceptors = {BasicAuthInterceptor.class})
+public class MyServiceImpl extends MyServiceGrpc.MyServiceImplBase {
+
+    @Override
+    public void myMethod(MyRequest request, StreamObserver<MyResponse> responseObserver) {
+        // ...
+    }
+}
+在這個示例中，我們在@GrpcService註解中指定了BasicAuthInterceptor，這意味著只有MyServiceImpl服務會使用該攔截器。其他gRPC服務不會使用該攔截器，而是使用全局攔截器註冊表中的攔截器。
+
+
+
+
+
+2 / 2
+
+如果我想要在basic authentication驗證完之後，再從user的一個或多個role中去驗證user是否有權限使用某個service，我可以怎麼做？
+最好的話是使用套件的方法，配合一些config的設定和@annotation
+如果你想在basic authentication驗證完之後，再從user的一個或多個role中去驗證user是否有權限使用某個service，可以使用Spring Security來實現。Spring Security提供了基於角色的訪問控制（Role-Based Access Control, RBAC）和基於方法的訪問控制（Method-Based Access Control, MBAC）等功能，可以滿足這個需求。
+
+以下是一個使用Spring Security實現基於角色的訪問控制的範例：
+
+在pom.xml中添加以下依賴：
+xml
+Copy code
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-security</artifactId>
+</dependency>
+創建一個名為SecurityConfig的類，並在其中配置Spring Security：
+java
+Copy code
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig extends WebSecurityConfigurerAdapter {
+
+    @Override
+    protected void configure(HttpSecurity http) throws Exception {
+        http
+            .authorizeRequests()
+                .antMatchers("/my-service").hasRole("ADMIN")
+                .anyRequest().authenticated()
+                .and()
+            .httpBasic();
+    }
+
+    @Override
+    protected void configure(AuthenticationManagerBuilder auth) throws Exception {
+        auth
+            .inMemoryAuthentication()
+                .withUser("admin").password("{noop}admin").roles("ADMIN");
+    }
+}
+在這個範例中，我們使用HttpSecurity配置了基於角色的訪問控制。只有擁有ADMIN角色的用戶才能訪問/my-service路徑，其他路徑需要經過身份驗證。在configure(AuthenticationManagerBuilder auth)方法中，我們使用了內存驗證的方式，並添加了一個名為admin，密碼為admin，角色為ADMIN的用戶。
+
+在gRPC服務的實現類上添加@PreAuthorize註解，指定需要的角色：
+java
+Copy code
+import io.grpc.stub.StreamObserver;
+import net.devh.boot.grpc.server.service.GrpcService;
+import org.springframework.security.access.prepost.PreAuthorize;
+
+@GrpcService
+public class MyServiceImpl extends MyServiceGrpc.MyServiceImplBase {
+
+    @PreAuthorize("hasRole('ADMIN')")
+    @Override
+    public void myMethod(MyRequest request, StreamObserver<MyResponse> responseObserver) {
+        // ...
+    }
+}
+在這個範例中，我們使用了@PreAuthorize註解來指定需要的角色，這裡是ADMIN角色。只有擁有ADMIN角色的用戶才能訪問myMethod方法，否則將會被拒絕訪問。
+
+注意：這個範例中使用的是基於角色的訪問控制。如果你需要使用基於方法的訪問控制，可以使用Spring Security的@PreAuthorize和@PostAuthorize等註解來
+
+
+
+
+繼續
+指定需要的權限。@PreAuthorize註解表示在進入方法之前進行權限檢查，如果用戶沒有指定的權限，則拒絕訪問；@PostAuthorize註解表示在方法返回之後進行權限檢查，如果用戶沒有指定的權限，則拒絕訪問返回的結果。
+
+以下是使用@PreAuthorize和@PostAuthorize實現基於方法的訪問控制的範例：
+
+在pom.xml中添加以下依賴：
+xml
+Copy code
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-security</artifactId>
+</dependency>
+創建一個名為SecurityConfig的類，並在其中配置Spring Security：
+java
+Copy code
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig extends WebSecurityConfigurerAdapter {
+
+    @Override
+    protected void configure(HttpSecurity http) throws Exception {
+        http
+            .authorizeRequests()
+                .anyRequest().authenticated()
+                .and()
+            .httpBasic();
+    }
+
+    @Override
+    protected void configure(AuthenticationManagerBuilder auth) throws Exception {
+        auth
+            .inMemoryAuthentication()
+                .withUser("admin").password("{noop}admin").roles("ADMIN");
+    }
+}
+在這個範例中，我們使用HttpSecurity配置了基於方法的訪問控制。所有的路徑都需要經過身份驗證，並使用了基本的認證方式。在configure(AuthenticationManagerBuilder auth)方法中，我們使用了內存驗證的方式，並添加了一個名為admin，密碼為admin，角色為ADMIN的用戶。
+
+在gRPC服務的實現類上添加@PreAuthorize和@PostAuthorize註解，指定需要的權限：
+java
+Copy code
+import io.grpc.stub.StreamObserver;
+import net.devh.boot.grpc.server.service.GrpcService;
+import org.springframework.security.access.prepost.PostAuthorize;
+import org.springframework.security.access.prepost.PreAuthorize;
+
+@GrpcService
+public class MyServiceImpl extends MyServiceGrpc.MyServiceImplBase {
+
+    @PreAuthorize("hasRole('ADMIN')")
+    @PostAuthorize("returnObject.username == authentication.name")
+    @Override
+    public void myMethod(MyRequest request, StreamObserver<MyResponse> responseObserver) {
+        // ...
+    }
+}
+在這個範例中，我們使用了@PreAuthorize註解來指定需要的權限，這裡是ADMIN角色。只有擁有ADMIN角色的用戶才能訪問myMethod方法，否則將會被拒絕訪問。我們還使用了@PostAuthorize註解來指定在方法返回之後進行權限檢查，這裡是檢查返回的對象的username是否等於當前用戶的名
+
+
+
+
+繼續
+稱。這樣可以確保用戶只能訪問自己擁有的資源。
+
+這裡使用了hasRole表達式來進行角色權限的驗證，可以使用其他的Spring Security表達式來進行更細粒度的權限控制。例如，hasAuthority可以用來驗證特定權限，hasIpAddress可以用來驗證用戶的IP地址等等。
+
+使用Spring Security的優點是它提供了豐富的安全特性，而且可以和現有的Spring應用程式無縫整合。使用基於方法的訪問控制可以讓我們對每個方法進行細粒度的權限控制，而且可以使用@PreAuthorize和@PostAuthorize等註解來方便地指定需要的權限。
+
+
+
+
+
+2 / 2
+
+如果我有多個使用者，各自有不同的username, password, role，並且這些資訊要儲存在application.properties中，在程式執行的時候從application.properties中讀取使用，我該怎麼做？application.properties要如何設定？
+可以在application.properties中定義多個使用者的username, password和role。例如，假設有兩個使用者，一個是admin，另一個是user，可以在application.properties中定義如下：
+
+bash
+Copy code
+# 定義admin使用者
+user.admin.username=admin
+user.admin.password=admin123
+user.admin.roles=ROLE_ADMIN,ROLE_USER
+
+# 定義user使用者
+user.user.username=user
+user.user.password=user123
+user.user.roles=ROLE_USER
+然後，在BasicAuthInterceptor中讀取這些使用者資訊並進行驗證。可以使用Spring提供的@Value註解來讀取application.properties中的配置。
+
+首先，在BasicAuthInterceptor中加入以下內容：
+
+java
+Copy code
+@Component
+public class BasicAuthInterceptor implements ServerInterceptor {
+    
+    // 讀取application.properties中的使用者配置
+    @Value("#{${users}}")
+    private Map<String, String> users;
+    
+    // ...
+    
+}
+上面的代碼中，@Value("#{${users}}")會從application.properties中讀取users的配置，並將其轉換為一個Map<String, String>的對象。這個Map中，鍵表示使用者的username，值表示使用者的password。
+
+然後，可以在BasicAuthInterceptor中修改authenticate方法，使用users來進行基本身份驗證和角色權限驗證。
+
+java
+Copy code
+public class BasicAuthInterceptor implements ServerInterceptor {
+    
+    // 讀取application.properties中的使用者配置
+    @Value("#{${users}}")
+    private Map<String, String> users;
+    
+    // ...
+    
+    @Override
+    public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(ServerCall<ReqT, RespT> call, Metadata headers, ServerCallHandler<ReqT, RespT> next) {
+        // 驗證basic身份驗證
+        String authHeader = headers.get(Metadata.Key.of("Authorization", Metadata.ASCII_STRING_MARSHALLER));
+        if (authHeader == null || !authHeader.toLowerCase().startsWith("basic ")) {
+            call.close(Status.UNAUTHENTICATED.withDescription("Missing Authorization header"), new Metadata());
+            return new ServerCall.Listener<ReqT>() {};
+        }
+        String[] parts = new String(Base64.getDecoder().decode(authHeader.substring(6))).split(":");
+        if (parts.length != 2) {
+            call.close(Status.UNAUTHENTICATED.withDescription("Invalid Authorization header"), new Metadata());
+            return new ServerCall.Listener<ReqT>() {};
+        }
+        String username = parts[0];
+        String password = parts[1];
+        if (!users.containsKey(username) || !users.get(username).equals(password)) {
+            call.close(Status.UNAUTHENTICATED.withDescription("Invalid username or password"), new Metadata());
+            return new ServerCall.Listener<ReqT>() {};
+        }
+        
+        // 驗證角色權限
+        String requiredRole = "ROLE_ADMIN"; // 指定需要的角色
+        String roles = users.get(username + ".roles"); // 從users中讀取使用者的角色列表
+        if (roles == null || !Arrays.asList(roles.split(",")).
+
+
+
+
+繼續
+您可以在 application.properties 文件中添加以下內容，其中 user1 和 user2 分別是兩個使用者的名稱，並且每個使用者都有自己的密碼和角色信息：
+
+bash
+Copy code
+# User 1
+users.user1.password=password1
+users.user1.roles=ROLE_ADMIN,ROLE_USER
+
+# User 2
+users.user2.password=password2
+users.user2.roles=ROLE_USER
+接下來，您可以使用 @ConfigurationProperties 注解來將這些配置注入到您的 Spring Boot 應用程序中，並使用 User 類型的列表來存儲使用者：
+
+swift
+Copy code
+@ConfigurationProperties(prefix = "users")
+public class UsersProperties {
+    private List<User> users;
+
+    // getter and setter
+
+    public static class User {
+        private String name;
+        private String password;
+        private List<String> roles;
+
+        // getter and setter
+    }
+}
+然後在您的 BasicAuthInterceptor 中，您可以從 UsersProperties 中讀取使用者信息，並在驗證完使用者名稱和密碼後，檢查使用者是否具有所需的角色：
+
+scss
+Copy code
+public class BasicAuthInterceptor implements ServerInterceptor {
+
+    private UsersProperties usersProperties;
+
+    public BasicAuthInterceptor(UsersProperties usersProperties) {
+        this.usersProperties = usersProperties;
+    }
+
+    @Override
+    public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(ServerCall<ReqT, RespT> call, Metadata headers, ServerCallHandler<ReqT, RespT> next) {
+        // 驗證使用者名稱和密碼
+        String username = getUsername(headers);
+        String password = getPassword(headers);
+        if (!isValidUser(username, password)) {
+            call.close(Status.UNAUTHENTICATED.withDescription("Invalid username or password"), headers);
+            return new ServerCall.Listener<ReqT>() {};
+        }
+
+        // 檢查使用者是否具有所需的角色
+        List<String> requiredRoles = getRequiredRoles(call.getMethodDescriptor().getFullMethodName());
+        if (!hasRequiredRoles(username, requiredRoles)) {
+            call.close(Status.PERMISSION_DENIED.withDescription("User does not have required roles"), headers);
+            return new ServerCall.Listener<ReqT>() {};
+        }
+
+        // 繼續處理請求
+        return next.startCall(call, headers);
+    }
+
+    private boolean isValidUser(String username, String password) {
+        // 驗證使用者名稱和密碼是否匹配
+        // 從 UsersProperties 中查找使用者信息
+        Optional<UsersProperties.User> user = usersProperties.getUsers().stream()
+                .filter(u -> u.getName().equals(username) && u.getPassword().equals(password))
+                .findFirst();
+        return user.isPresent();
+    }
+
+    private boolean hasRequiredRoles(String username, List<String> requiredRoles) {
+        // 檢查使用者是否具有所需的角色
+        // 從 UsersProperties 中查找使用者信息
+        Optional<UsersProperties.User> user = usersProperties.getUsers().stream()
+                .filter(u -> u.getName().equals(username))
+                .findFirst();
+        if (!user.isPresent()) {
+            return false;
+        }
+
+        List<String> userRoles = user.get().getRoles();
+        for (String role : requiredRoles) {
+            if (!userRoles.contains(role)) {
+                return
+
+
+
+
+繼續
+你可以在application.properties中按以下格式儲存每個使用者的資訊：
+
+bash
+Copy code
+# User1
+users.user1.password=pass1
+users.user1.roles=ROLE_ADMIN,ROLE_USER
+
+# User2
+users.user2.password=pass2
+users.user2.roles=ROLE_USER
+接下來，你可以在BasicAuthInterceptor中讀取這些資訊並進行驗證。以下是一個示例：
+
+java
+Copy code
+@Component
+public class BasicAuthInterceptor implements ServerInterceptor {
+    
+    @Value("${users.user1.password}")
+    private String user1Password;
+    
+    @Value("${users.user1.roles}")
+    private List<String> user1Roles;
+    
+    @Value("${users.user2.password}")
+    private String user2Password;
+    
+    @Value("${users.user2.roles}")
+    private List<String> user2Roles;
+
+    @Override
+    public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(
+            ServerCall<ReqT, RespT> call, Metadata headers,
+            ServerCallHandler<ReqT, RespT> next) {
+        
+        String authorizationHeader = headers.get(Metadata.Key.of("Authorization",
+                Metadata.ASCII_STRING_MARSHALLER));
+        
+        if (authorizationHeader != null && authorizationHeader.toLowerCase()
+                .startsWith("basic ")) {
+            
+            String base64Credentials = authorizationHeader.substring("Basic".length()).trim();
+            byte[] decoded = Base64.getDecoder().decode(base64Credentials);
+            String credentials = new String(decoded, StandardCharsets.UTF_8);
+            String[] parts = credentials.split(":", 2);
+            String username = parts[0];
+            String password = parts[1];
+            
+            if (authenticateUser(username, password)) {
+                if (checkAuthorization(username)) {
+                    return next.startCall(call, headers);
+                } else {
+                    call.close(Status.PERMISSION_DENIED.withDescription("User does not have permission to access this resource"),
+                            new Metadata());
+                    return new ServerCall.Listener<>() {};
+                }
+            } else {
+                call.close(Status.UNAUTHENTICATED.withDescription("Invalid username or password"), new Metadata());
+                return new ServerCall.Listener<>() {};
+            }
+        } else {
+            call.close(Status.UNAUTHENTICATED.withDescription("Authorization header is missing or invalid"), new Metadata());
+            return new ServerCall.Listener<>() {};
+        }
+    }
+    
+    private boolean authenticateUser(String username, String password) {
+        if ("user1".equals(username) && password.equals(user1Password)) {
+            return true;
+        } else if ("user2".equals(username) && password.equals(user2Password)) {
+            return true;
+        }
+        return false;
+    }
+    
+    private boolean checkAuthorization(String username) {
+        if ("user1".equals(username)) {
+            return user1Roles.contains("ROLE_ADMIN");
+        } else if ("user2".equals(username)) {
+            return user2Roles.contains("ROLE_ADMIN");
+        }
+        return false;
+    }
+}
+在這個示例中，我們使用@Value注入application.properties中的使用者資訊，然後在驗證使用者時進行使用。你可以根據你的需求進行修改和擴展。
+
+
